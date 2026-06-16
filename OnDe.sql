@@ -173,10 +173,180 @@ ON v.maVe = gd.maVe;
 
 -- Tính KPI & Thưởng doanh thu
 
+SELECT
+    dt.maTau,
+    dt.tenTau,
+    COUNT(v.maVe) AS tongSoVeBanDuoc,
+    SUM(v.giaVe) AS tongDoanhThu
+FROM railway.quanLyDoanTau dt
+INNER JOIN railway.quanLyVe v
+ON v.maTau = dt.maTau
+GROUP BY dt.maTau, dt.tenTau
+HAVING COUNT(v.maVe) >= 3;
 
 
+-- Thanh tra giao dịch
+SELECT
+    v.maVe,
+    v.maHK,
+    v.ngayKhoiHanh
+FROM railway.quanLyVe v
+LEFT JOIN railway.quanLyGiaoDich gd
+    ON v.maVe = gd.maVe
+WHERE gd.maVe IS NULL;
+
+-- Phân tích chuyên sâu
+
+SELECT
+    kh.maHK,
+    kh.hoTen,
+    kh.sdt,
+    SUM(gd.soTien) AS tongTienThanhToan
+FROM railway.quanLyKhachHang kh
+INNER JOIN railway.quanLyVe v
+ON v.maHK = kh.mahk
+INNER JOIN railway.quanlygiaodich gd
+ON v.maVe = gd.maVe
+GROUP BY kh.maHK, kh.hoTen, kh.sdt
+HAVING SUM(gd.soTien) > 200000
+ORDER BY kh.maHK ASC;
+
+--  View: Vé sắp khởi hành – vw_UpcomingTrips
+
+CREATE VIEW railway.vw_UpcomingTrips AS
+SELECT
+    kh.hoTen,
+    dt.tenTau,
+    v.soGhe,
+    v.giaVe,
+    v.ngayKhoiHanh
+FROM railway.quanLyVe v
+INNER JOIN railway.quanLyKhachHang kh
+ON v.maHK = kh.maHK
+INNER JOIN railway.quanLyDoanTau dt
+ON v.maTau = dt.maTau
+WHERE v.ngayKhoiHanh > CURRENT_DATE
+ORDER BY v.ngayKhoiHanh ASC;
+
+SELECT *
+FROM railway.vw_UpcomingTrips;
+
+--  View: Vé giá trị cao – vw_HighValueTickets
+CREATE VIEW railway.vw_HighValueTickets AS
+SELECT
+    kh.hoTen,
+    dt.tenTau,
+    v.soGhe,
+    v.giaVe
+FROM railway.quanLyVe v
+INNER JOIN railway.quanLyKhachHang kh
+ON v.maHK = kh.maHK
+INNER JOIN railway.quanLyDoanTau dt
+ON v.maTau = dt.maTau
+WHERE v.giaVe > 500000
+ORDER BY v.giaVe DESC;
+
+SELECT *
+FROM railway.vw_HighValueTickets;
+
+-- Trigger: Kiểm tra ngày khởi hành – tg_check_ticket_date
+
+-- tạo function để kiểm tra
+CREATE OR REPLACE FUNCTION railway.fn_check_ticket_date()
+RETURNS TRIGGER
+AS $$
+BEGIN
+    IF NEW.ngayKhoiHanh < CURRENT_DATE THEN
+        RAISE EXCEPTION
+        'Ngay khoi hanh khong duoc nho hon ngay hien tai';
+    END IF;
+
+    RETURN NEW;
+
+end;
+$$ LANGUAGE plpgsql;
+
+-- tạo trigger để tự động kiểm tra
+CREATE TRIGGER tg_check_ticket_date
+BEFORE INSERT
+ON railway.quanLyVe
+FOR EACH ROW
+EXECUTE FUNCTION railway.fn_check_ticket_date();
+
+-- Trigger: Cập nhật số ghế còn trống – tg_update_seats
+-- tạo function
+CREATE OR REPLACE FUNCTION railway.fn_update_seats()
+RETURNS TRIGGER
+AS $$
+BEGIN
+    UPDATE railway.quanLyDoanTau
+    SET tongSoGhe = tongSoGhe -1
+    WHERE maTau = NEW.maTau;
+
+    RETURN NEW;
 
 
+end;
+
+$$ language plpgsql;
+
+-- tạo trigger
+CREATE TRIGGER tg_update_seats
+AFTER INSERT
+ON railway.quanLyVe
+FOR EACH ROW
+EXECUTE FUNCTION railway.fn_update_seats();
+
+-- Procedure: Thêm hành khách – sp_add_passenger
+CREATE OR REPLACE PROCEDURE railway.sp_add_passenger(
+    p_maHK VARCHAR(20),
+    p_hoTen VARCHAR(100),
+    p_email VARCHAR(50),
+    p_sdt VARCHAR(15),
+    p_cccd VARCHAR(12)
+)
+language plpgsql
+AS $$
+BEGIN
+    INSERT INTO railway.quanLyKhachHang
+    (mahk, hoten, email, sdt, cccd)
+    VALUES
+    (p_maHK,p_hoTen,p_email,p_sdt,p_cccd);
+end;
+$$;
+
+CALL railway.sp_add_passenger(
+        'P006',
+        'Nguyen Van B',
+        'b@gmail.com',
+        '0912345678',
+        '123456789999'
+     );
+
+SELECT *
+FROM railway.quanLyKhachHang;
+
+-- Procedure: Hủy vé – sp_cancel_ticket
+
+CREATE OR REPLACE PROCEDURE railway.sp_cancel_ticket(
+    p_maVe VARCHAR(20)
+)
+language plpgsql
+AS $$
+BEGIN
+    DELETE FROM railway.quanLyGiaoDich
+    WHERE maVe = p_maVe;
+
+    DELETE FROM railway.quanLyVe
+    WHERE maVe = p_maVe;
+
+END;
+$$;
+
+CALL railway.sp_cancel_ticket('TK001');
+
+SELECT *
+FROM railway.quanLyVe;
 
 DROP TABLE railway.quanLyGiaoDich;
 DROP TABLE railway.quanLyVe;
